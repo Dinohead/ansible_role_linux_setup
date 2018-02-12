@@ -1,0 +1,118 @@
+---
+#========================
+# File tasks/main.yml
+#
+# Description:
+#
+# Author: Derek 'dRock' Halsey
+#========================
+
+- name: FILE | Ensure .ssh directory exists
+  file:
+    path: /home/{{ linux_setup.user.name }}/.ssh
+    state: directory
+    owner: "{{ linux_setup.user.name }}"
+    group: "{{ linux_setup.user.name }}"
+    mode: "u=rwx,g=,o="
+  vars:
+    ansible_password: "{{ linux_setup.user.password }}"
+
+- name: TEMPLATE | Template out public and private ssh keys
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ linux_setup.user.name }}"
+    group: "{{ linux_setup.user.name }}"
+    mode: "u=rw,g=,o="
+  with_items:
+  - { src: id_rsa.j2, dest: "/home/{{ linux_setup.user.name }}/.ssh/id_rsa" }
+  - { src: id_rsa.pub.j2, dest: "/home/{{ linux_setup.user.name }}/.ssh/id_rsa.pub" }
+  vars:
+    ansible_password: "{{ linux_setup.user.password }}"
+
+- name: LINEINFILE | Ensure public key is in authorized_keys
+  lineinfile:
+    line: "{{ linux_setup.ssh.authorized_keys }}"
+    path: /home/{{ linux_setup.user.name }}/.ssh/authorized_keys
+    state: present
+    owner: "{{ linux_setup.user.name }}"
+    group: "{{ linux_setup.user.name }}"
+    mode: "u=rw,g=,o="
+    create: true
+  vars:
+    ansible_password: "{{ linux_setup.user.password }}"
+
+- name: LINEINFILE | Setup password-less root user
+  become: true
+  become_user: root
+  lineinfile:
+    line: "{{ linux_setup.user.name }} ALL=(ALL:ALL) NOPASSWD:ALL"
+    path: /etc/sudoers
+    state: present
+  vars:
+    ansible_become_pass: "{{ linux_setup.become_pass }}"
+
+- name: TEMPLATE | Set system hostname
+  become: true
+  become_user: root
+  template:
+    src: hostname.j2
+    dest: /etc/hostname
+    owner: root
+    group: root
+    mode: "u=rw,g=r,o=r"
+  register: linux_setup_hostname
+
+- name: TEMPLATE | Fix hostfile
+  become: true
+  become_user: root
+  template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: "u=rw,g=r,o=r"
+  register: linux_setup_hostfile
+
+- name: APT | Add virtual kernel extra features
+  become: true
+  become_user: root
+  apt:
+    update_cache: true
+    name: linux-image-extra-virtual
+    state: present
+  when: inventory_hostname in groups[ 'ubuntu']
+
+- name: Add search Domain
+  become: true
+  become_user: root
+  lineinfile:
+    path: /etc/sysconfig/network-scripts/ifcfg-{{ linux_setup.interface }}
+    regexp: "^DOMAIN="
+    line: "DOMAIN={{ linux_setup.fqdn.split('.')[1:] | join('.') }}"
+    state: present
+  when: inventory_hostname in groups[ 'redhat' ]
+
+- name: Check if a reboot is required
+  stat:
+    path: /var/run/reboot-required
+    get_md5: false
+  register: linux_setup_rebootRequired
+
+- name: SHELL | restart system if hostname was changed or kernel update was applied
+  become: true
+  become_user: root
+  shell: sleep 2 && shutdown -r now "Ansible updates triggered"
+  async: 1
+  poll: 0
+  when: linux_setup_hostname.changed or linux_setup_hostfile.changed or linux_setup_rebootRequired.stat.exists
+  register: linux_setup_reboot
+
+- name: WAIT_FOR | Wait for ssh to resume
+  local_action:
+    module: wait_for
+    port: 22
+    host: "{{ linux_setup.fqdn }}"
+    delay: 30
+    timeout: 400
+  when: linux_setup_reboot.changed

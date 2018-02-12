@@ -1,0 +1,24 @@
+---
+#========================
+# File defaults/main.yml
+#
+# Description: default variables for role
+#
+# Author: Derek 'dRock' Halsey
+#========================
+
+linux_setup:
+  user:
+    name: ansible
+    password: PASSWORD
+
+  ssh:
+    public: ""
+    private: ""
+    authorized_keys: ""
+
+  sdn: host
+  fqdn: host.domain.com
+  ip: 192.168.1.1
+  interface: eth0
+  become_pass: PASSWORD
